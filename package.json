@@ -1,6 +1,6 @@
 {
   "name": "check-ai-slop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Offline, explainable heuristics for spotting AI-generated code patterns in a codebase.",
   "type": "module",
   "bin": {
@@ -9,6 +9,14 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/byigitt/check-ai-slop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/byigitt/check-ai-slop/issues"
+  },
+  "homepage": "https://github.com/byigitt/check-ai-slop#readme",
   "files": [
     "dist"
   ],
