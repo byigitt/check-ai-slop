@@ -193,7 +193,6 @@ const JS_IMPORT_RE = /(?:^\s*import\s+['"]([^'"]+)['"]|\bfrom\s+['"]([^'"]+)['"]
 const PY_IMPORT_RE = /^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|import\s+([A-Za-z_][\w.]*))/gm;
 const NULL_GUARD_RE = /\b(?:if\s*\([^)]*(?:===?\s*(?:null|undefined)|!={1,2}\s*(?:null|undefined))|if\s+\w+\s+is\s+None|if\s+not\s+isinstance\s*\(|if\s+\w+\s*(?:<=|<|>=|>)\s*0\s*:)/g;
 const MOCK_RE = /\b(?:dummy|dummies|stub|mock|spy|spies|fake|monkeypatch|monkey_patch|MagicMock|jest\.mock|vi\.mock|sinon|patch\s*\()/gi;
-const TODO_RE = /\b(?:TODO|FIXME|XXX|HACK|BUG|REFACTOR)\b/gi;
 const JSDOC_RE = /\/\*\*[\s\S]*?\*\//g;
 
 interface ProjectContext {
@@ -269,7 +268,7 @@ export function scanTextFile(path: string, text: string, context: ProjectContext
   const suffix = extname(path).toLowerCase();
 
   for (const spec of REGEX_PATTERNS) {
-    if (patternApplies(spec, suffix)) {
+    if (!spec.extensions || suffix in spec.extensions) {
       applyRegexPattern(spec, text, state, options);
     }
   }
@@ -402,9 +401,6 @@ function applyRegexPattern(spec: PatternSpec, text: string, state: ScanState, op
   }
 }
 
-function patternApplies(spec: PatternSpec, suffix: string): boolean {
-  return !spec.extensions || suffix in spec.extensions;
-}
 
 function basicMetrics(text: string): Record<string, number> {
   const lines = text.split(/\r?\n/);
