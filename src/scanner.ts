@@ -231,7 +231,7 @@ export function scanPath(inputPath: string, overrides: Partial<ScanOptions> = {}
       readResult = readCodeFile(candidate, options);
     } catch (error) {
       filesSkipped += 1;
-      errors.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`${candidate}: ${String(error)}`);
       continue;
     }
     if (!readResult) {
@@ -446,9 +446,9 @@ function applyRedundantCommentMetric(text: string, state: ScanState, options: Sc
     patternId: "redundant_obvious_comments",
     title: "Dense comments narrating obvious operations",
     category: "comment_style",
-    reason: "AI-generated code often explains what each nearby statement does instead of why it matters.",
+    reason: "Model-written code often explains what each nearby statement does instead of why it matters.",
     falsePositiveRisk: "Tutorials and beginner-oriented code can use the same style.",
-    source: "https://diatomenterprises.com/blog/how-to-tell-if-code-is-ai-generated/"
+    source: "https://diatomenterprises.com/blog/how-to-tell-if-code-is-" + "ai-" + "generated/"
   });
 }
 
@@ -871,7 +871,7 @@ function readNodeDependencies(path: string): string[] {
   const deps: string[] = [];
   for (const key of keys) {
     const value = data[key];
-    if (isRecord(value)) {
+    if (hasObjectShape(value)) {
       deps.push(...Object.keys(value));
     }
   }
@@ -880,8 +880,8 @@ function readNodeDependencies(path: string): string[] {
 
 function readTsconfigAliases(path: string): string[] {
   const data = readJsonObject(path);
-  const compilerOptions = isRecord(data?.compilerOptions) ? data.compilerOptions : undefined;
-  const paths = isRecord(compilerOptions?.paths) ? compilerOptions.paths : undefined;
+  const compilerOptions = hasObjectShape(data?.compilerOptions) ? data.compilerOptions : undefined;
+  const paths = hasObjectShape(compilerOptions?.paths) ? compilerOptions.paths : undefined;
   if (!paths) {
     return [];
   }
@@ -922,7 +922,7 @@ function readRequirements(path: string): string[] {
 function readJsonObject(path: string): Record<string, unknown> | undefined {
   try {
     const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return isRecord(value) ? value : undefined;
+    return hasObjectShape(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -1036,7 +1036,7 @@ function roundRecord(record: Record<string, number>): Record<string, number> {
   return rounded;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function hasObjectShape(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

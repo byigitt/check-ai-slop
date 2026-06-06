@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { existsSync, realpathSync } from "node:fs";
-import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { scanPath } from "./scanner.js";
@@ -27,7 +26,7 @@ export function main(argv = process.argv.slice(2)): number {
   try {
     args = parseArgs(argv);
   } catch (error) {
-    process.stderr.write(`check-ai-slop: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`check-ai-slop: ${String(error)}\n`);
     process.stderr.write("Run `check-ai-slop --help` for usage.\n");
     return 2;
   }
@@ -54,7 +53,7 @@ export function main(argv = process.argv.slice(2)): number {
   try {
     report = scanPath(args.path, options);
   } catch (error) {
-    process.stderr.write(`check-ai-slop: ${error instanceof Error ? error.message : inspect(error)}\n`);
+    process.stderr.write(`check-ai-slop: ${String(error)}\n`);
     return 2;
   }
 

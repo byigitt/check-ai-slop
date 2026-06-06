@@ -273,5 +273,122 @@ export const REGEX_PATTERNS: readonly PatternSpec[] = [
     reason: "Structural slop detectors flag disabled tests because generated suites often leave brittle scenarios skipped instead of fixed.",
     falsePositiveRisk: "Intentional quarantines exist; report as review priority, not proof.",
     source: "https://github.com/flamehaven01/AI-SLOP-Detector"
+  },
+  {
+    id: "ai_attribution_footer_cluster",
+    title: "Cluster of AI attribution footer strings",
+    category: "provenance",
+    weight: 10,
+    maxScore: 50,
+    regex: /\b(?:(?:generated|created|written|authored|coded)\s+(?:by|with|using|via)\s+(?:AI|Claude|Anthropic|GPT|ChatGPT|Copilot|Cursor|Codex|Gemini|OpenAI)|Co-authored-by:?\s*(?:AI|Claude|Anthropic|ChatGPT|Copilot|Cursor|Codex|Gemini|OpenAI)|AI[-_. ]?(?:assisted|generated))\b/gim,
+    reason: "Real repositories that block or measure AI code often keep arrays of generated-by/co-authored-by/AI-assisted footer markers; clusters are a strong provenance-review signal.",
+    falsePositiveRisk: "Detector, policy-hook, and analytics repositories intentionally contain these strings; review path and intent before treating it as authored code.",
+    source: "https://raw.githubusercontent.com/androidZzT/cc-statistics/main/cc_stats/analyzer.py"
+  },
+  {
+    id: "py_yaml_unsafe_load",
+    title: "Unsafe PyYAML load",
+    category: "security_slop",
+    weight: 14,
+    maxScore: 42,
+    regex: /\byaml\.load\s*\((?![^)\n]*(?:Loader\s*=\s*yaml\.(?:SafeLoader|CSafeLoader)|,\s*(?:yaml\.)?(?:SafeLoader|CSafeLoader)))[^)\n]*\)|Loader\s*=\s*yaml\.(?:Loader|UnsafeLoader)/gm,
+    extensions: PYTHON,
+    reason: "Bandit flags yaml.load without a safe loader because it can instantiate arbitrary Python objects; generated snippets often choose convenience deserialization APIs.",
+    falsePositiveRisk: "Trusted legacy config loaders may intentionally use object YAML; reviewers need data-source context.",
+    source: "https://bandit.readthedocs.io/en/latest/plugins/b506_yaml_load.html"
+  },
+  {
+    id: "js_sql_query_interpolation",
+    title: "JavaScript SQL query string interpolation",
+    category: "security_slop",
+    weight: 12,
+    maxScore: 36,
+    regex: /\b(?:query|execute|raw)\s*\(\s*(?:`[^`]*(?:SELECT|INSERT|UPDATE|DELETE)[^`]*\$\{|['"][^'"]*(?:SELECT|INSERT|UPDATE|DELETE)[^'"]*['"]\s*\+)/gim,
+    extensions: TS_JS,
+    reason: "CodeQL documents string-built SQL queries as injection risks; AI-generated backend examples often skip parameterization.",
+    falsePositiveRisk: "Escaped values, trusted migration scripts, or safe query wrappers can look similar to a regex scanner.",
+    source: "https://codeql.github.com/codeql-query-help/javascript/js-sql-injection/"
+  },
+  {
+    id: "py_sql_query_interpolation",
+    title: "Python SQL query string interpolation",
+    category: "security_slop",
+    weight: 12,
+    maxScore: 36,
+    regex: /(?:cursor|conn|db)\.(?:execute|executemany)\s*\(\s*(?:f['"][^'"]*(?:SELECT|INSERT|UPDATE|DELETE)|['"][^'"]*(?:SELECT|INSERT|UPDATE|DELETE)[^'"]*['"]\s*(?:%|\.format\(|\+))/gim,
+    extensions: PYTHON,
+    reason: "CodeQL's Python SQL-injection guidance flags f-string/format/concatenated queries; generated data-access snippets commonly use these shortcuts.",
+    falsePositiveRisk: "Static migration SQL and trusted internal scripts may compose SQL safely outside request paths.",
+    source: "https://codeql.github.com/codeql-query-help/python/py-sql-injection/"
+  },
+  {
+    id: "express_cors_wildcard_credentials",
+    title: "Permissive CORS wildcard with credentials",
+    category: "security_slop",
+    weight: 12,
+    maxScore: 36,
+    regex: /cors\s*\(\s*\{[\s\S]{0,220}origin\s*:\s*['"]\*['"][\s\S]{0,220}credentials\s*:\s*true|Access-Control-Allow-Origin[^;\n]*\*[\s\S]{0,180}Access-Control-Allow-Credentials[^;\n]*true/gim,
+    extensions: TS_JS,
+    reason: "LLM-scaffolded web apps often broaden CORS to make requests work, creating an access-control review risk.",
+    falsePositiveRisk: "Internal/dev APIs and browser-rejected configurations can match; check deployment scope.",
+    source: "https://www.endorlabs.com/learn/the-most-common-security-vulnerabilities-in-ai-generated-code"
+  },
+  {
+    id: "express_direct_html_response_xss",
+    title: "Direct HTML response concatenation",
+    category: "security_slop",
+    weight: 12,
+    maxScore: 36,
+    regex: /res\.(?:send|write|end)\s*\(\s*(?:`[^`]*<[^>]+>[^`]*\$\{|['"][^'"]*<[^>]+>[^'"]*['"]\s*\+|\w+\s*\+)/gim,
+    extensions: TS_JS,
+    reason: "Semgrep's Express XSS guidance flags raw HTML concatenation in responses; generated demos often bypass escaping/templates.",
+    falsePositiveRisk: "Static literal pages and already-sanitized CMS/admin rendering need human review.",
+    source: "https://docs.semgrep.dev/cheat-sheets/express-xss/"
+  },
+  {
+    id: "template_unescaped_interpolation",
+    title: "Unescaped template interpolation",
+    category: "security_slop",
+    weight: 10,
+    maxScore: 30,
+    regex: /<%-[\s\S]{0,120}%>|\{\{\{[\s\S]{0,120}\}\}\}|\{\{\s*&|!\{[^}]+\}|^\s*\w+\([^)]*!=/gm,
+    reason: "Template engines expose raw-output syntax that generated snippets may use without sanitizer context.",
+    falsePositiveRisk: "Legitimate rich-text rendering can be safe when paired with sanitizer enforcement.",
+    source: "https://docs.semgrep.dev/cheat-sheets/express-xss/"
+  },
+  {
+    id: "python_flask_debug_true",
+    title: "Flask debug mode enabled",
+    category: "security_slop",
+    weight: 10,
+    maxScore: 30,
+    regex: /app\.run\s*\([^)]*debug\s*=\s*True|app\.debug\s*=\s*True|FLASK_DEBUG\s*=\s*['"]?1/gm,
+    extensions: PYTHON,
+    reason: "Bandit flags Flask debug mode because generated demos often ship development settings into app code.",
+    falsePositiveRisk: "Local examples and tests can intentionally set debug mode; production path context matters.",
+    source: "https://bandit.readthedocs.io/en/latest/plugins/b201_flask_debug_true.html"
+  },
+  {
+    id: "jwt_verification_disabled",
+    title: "JWT verification bypass option",
+    category: "security_slop",
+    weight: 14,
+    maxScore: 42,
+    regex: /jwt\.decode\s*\([^)]*(?:verify\s*=\s*False|verify_signature['"]?\s*:\s*False)|jwt\.verify\s*\([^)]*\{[^}]*ignoreExpiration\s*:\s*true|\bdecode\s*\([^)]*\{[^}]*complete\s*:\s*true/gim,
+    reason: "AI auth scaffolds may disable signature/expiration checks to make examples work; auth bypasses deserve explicit review.",
+    falsePositiveRisk: "Token-inspection utilities may decode without trust decisions; check whether the result gates access.",
+    source: "https://www.endorlabs.com/learn/the-most-common-security-vulnerabilities-in-ai-generated-code"
+  },
+  {
+    id: "python_pickle_deserialization",
+    title: "Python pickle/dill deserialization",
+    category: "security_slop",
+    weight: 10,
+    maxScore: 30,
+    regex: /\b(?:pickle|cPickle|dill)\.(?:load|loads)\s*\(/gm,
+    extensions: PYTHON,
+    reason: "Pickle-style deserialization is unsafe for untrusted data and is a recurring convenience shortcut in generated Python helpers.",
+    falsePositiveRisk: "Trusted local model/cache loading is common; higher concern when input names imply request/body/file/user data.",
+    source: "https://docs.python.org/3/library/pickle.html"
   }
 ];
