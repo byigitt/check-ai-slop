@@ -31,6 +31,8 @@ test("detects the referenced was-gpt-here TypeScript helper", () => {
     assert.equal(report.filesScanned, 1);
     assert.equal(report.confidence, "low");
     assert.ok(report.score >= 20);
+    assert.ok((report.files[0]?.signalScores.authorship ?? 0) > 0);
+    assert.equal(report.files[0]?.evidence[0]?.signalKind, "authorship");
     assert.equal(report.files[0]?.evidence[0]?.patternId, "ts_exact_is_record_guard");
   });
 });
@@ -145,6 +147,7 @@ _AI_COMMIT_MARKERS = [
 
     assert.equal(report.confidence, "high");
     assert.ok(patternIds.has("ai_attribution_footer_cluster"));
+    assert.ok(report.signalScores.authorship > report.signalScores.quality_risk);
     assert.ok(patternIds.has("self_admitted_ai_comment"));
   });
 });
@@ -200,6 +203,124 @@ yaml.load("{}", CSafeLoader)
   });
 });
 
+test("detects expanded JavaScript security slop patterns", () => {
+  withTempDir((directory) => {
+    writeFileSync(
+      join(directory, "generated-route.ts"),
+      `import fs from "node:fs";
+import path from "node:path";
+
+// @ts-ignore generated handler is loose
+export function handler(req, res, app) {
+  fs.readFileSync(path.join("/srv/uploads", req.params.name));
+  const matcher = new RegExp(req.query.q);
+  const profile = {};
+  profile[req.body.field] = req.body.value;
+  const sessionToken = Math.random().toString(36);
+  app.use(session({ secret: "supersecret123", cookie: { secure: false, httpOnly: false } }));
+  res.cookie("sid", sessionToken, { sameSite: "none" });
+  res.redirect(req.query.next);
+}
+`
+    );
+
+    const report = scanPath(directory, { includeUnknownImports: false });
+    assert.equal(report.signalScores.authorship, 0);
+    assert.ok(report.signalScores.quality_risk > 0);
+    const patternIds = new Set(report.files[0]?.evidence.map((item) => item.patternId));
+
+    for (const patternId of [
+      "js_path_traversal_user_path",
+      "js_regex_from_request_input",
+      "js_dynamic_property_write_from_request",
+      "insecure_random_token_generation",
+      "hardcoded_session_secret_literal",
+      "insecure_cookie_flags",
+      "express_open_redirect_from_request",
+      "lint_or_type_suppression_cluster"
+    ]) {
+      assert.ok(patternIds.has(patternId), `missing ${patternId}`);
+    }
+  });
+});
+
+test("detects expanded Python slop patterns from real vulnerable examples", () => {
+  withTempDir((directory) => {
+    writeFileSync(
+      join(directory, "vulnerable_flask_excerpt.py"),
+      `import hashlib
+import jinja2
+import requests
+import tempfile
+
+app.config['SECRET_KEY_HMAC'] = 'secret'
+
+def login(user, password, url):
+    assert user.is_admin
+    hash_pass = hashlib.md5(password).hexdigest()
+    response = requests.get(url)
+    temp_name = tempfile.mktemp()
+    return hash_pass, response, temp_name
+
+def collect(values=[]):
+    return values
+
+def render(templateLoader):
+    return jinja2.Environment(autoescape=False, loader=templateLoader)
+
+try:
+    risky()
+except:
+    pass
+
+items.push(1)
+`
+    );
+
+    const report = scanPath(directory, { includeUnknownImports: false });
+    assert.equal(report.signalScores.authorship, 0);
+    assert.ok(report.signalScores.quality_risk > 0);
+    const patternIds = new Set(report.files[0]?.evidence.map((item) => item.patternId));
+
+    for (const patternId of [
+      "py_hardcoded_framework_secret",
+      "py_assert_security_check",
+      "weak_hash_for_security_context",
+      "py_http_request_without_timeout",
+      "py_tempfile_mktemp_race",
+      "py_mutable_default_arg",
+      "py_jinja_autoescape_disabled",
+      "py_bare_except_swallow",
+      "python_cross_language_contamination"
+    ]) {
+      assert.ok(patternIds.has(patternId), `missing ${patternId}`);
+    }
+  });
+});
+
+test("keeps mature Requests timeout API snippet negative for missing-timeout rule", () => {
+  withTempDir((directory) => {
+    writeFileSync(
+      join(directory, "requests_sessions_excerpt.py"),
+      `def request(self, method, url, **kwargs):
+    timeout = kwargs.pop("timeout", None)
+    request = Request(method=method.upper(), url=url)
+    prep = self.prepare_request(request)
+    send_kwargs = {
+        "timeout": timeout,
+        "allow_redirects": kwargs.pop("allow_redirects", True),
+    }
+    return self.send(prep, **send_kwargs)
+`
+    );
+
+    const report = scanPath(directory, { includeUnknownImports: false });
+    const patternIds = new Set(report.files.flatMap((file) => file.evidence.map((item) => item.patternId)));
+
+    assert.equal(patternIds.has("py_http_request_without_timeout"), false);
+  });
+});
+
 test("CLI emits JSON and fail-on low exits with status 1", () => {
   withTempDir((directory) => {
     writeFileSync(
@@ -226,8 +347,14 @@ test("CLI emits JSON and fail-on low exits with status 1", () => {
       }
     );
 
-    const payload = JSON.parse(output) as { confidence: string; files: Array<{ evidence: Array<{ patternId: string }> }> };
+    const payload = JSON.parse(output) as {
+      confidence: string;
+      signalScores: { authorship: number; quality_risk: number };
+      files: Array<{ evidence: Array<{ patternId: string; signalKind: string }> }>;
+    };
     assert.equal(payload.confidence, "low");
     assert.equal(payload.files[0]?.evidence[0]?.patternId, "ts_exact_is_record_guard");
+    assert.equal(payload.files[0]?.evidence[0]?.signalKind, "authorship");
+    assert.ok(typeof payload.signalScores.authorship === "number");
   });
 });

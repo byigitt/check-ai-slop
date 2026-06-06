@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { PYTHON, REGEX_PATTERNS, TS_JS } from "./patterns.js";
-import type { Confidence, Evidence, FileReport, PatternSpec, ScanOptions, ScanReport } from "./types.js";
+import type { Confidence, Evidence, FileReport, PatternSpec, ScanOptions, ScanReport, SignalKind } from "./types.js";
 
 const IGNORED_DIRECTORIES: Record<string, true> = {
   ".git": true,
@@ -194,6 +194,15 @@ const PY_IMPORT_RE = /^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|import\s+([A-Za-z
 const NULL_GUARD_RE = /\b(?:if\s*\([^)]*(?:===?\s*(?:null|undefined)|!={1,2}\s*(?:null|undefined))|if\s+\w+\s+is\s+None|if\s+not\s+isinstance\s*\(|if\s+\w+\s*(?:<=|<|>=|>)\s*0\s*:)/g;
 const MOCK_RE = /\b(?:dummy|dummies|stub|mock|spy|spies|fake|monkeypatch|monkey_patch|MagicMock|jest\.mock|vi\.mock|sinon|patch\s*\()/gi;
 const JSDOC_RE = /\/\*\*[\s\S]*?\*\//g;
+const SIGNAL_KINDS: readonly SignalKind[] = ["authorship", "quality_risk"];
+const AUTHORSHIP_PATTERN_IDS: Record<string, true> = {
+  ts_exact_is_record_guard: true,
+  ts_record_guard_family: true,
+  self_admitted_ai_comment: true,
+  ai_provenance_block: true,
+  conversational_preamble: true,
+  ai_attribution_footer_cluster: true
+};
 
 interface ProjectContext {
   root: string;
@@ -211,7 +220,10 @@ interface ReadResult {
 interface ScanState {
   evidence: Evidence[];
   categoryScores: Record<string, number>;
+  signalScores: Record<SignalKind, number>;
 }
+
+type EvidenceDraft = Omit<Evidence, "signalKind"> & { signalKind?: SignalKind };
 
 export function scanPath(inputPath: string, overrides: Partial<ScanOptions> = {}): ScanReport {
   const options: ScanOptions = { ...DEFAULT_OPTIONS, ...overrides };
@@ -250,6 +262,7 @@ export function scanPath(inputPath: string, overrides: Partial<ScanOptions> = {}
   files.sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
   const score = repositoryScore(files);
   const evidenceCount = files.reduce((total, file) => total + file.evidence.length, 0);
+  const signalScores = repositorySignalScores(files);
   return {
     root,
     score: round(score),
@@ -258,13 +271,14 @@ export function scanPath(inputPath: string, overrides: Partial<ScanOptions> = {}
     filesSkipped,
     bytesScanned,
     evidenceCount,
+    signalScores,
     files,
     errors
   };
 }
 
 export function scanTextFile(path: string, text: string, context: ProjectContext, options: ScanOptions = DEFAULT_OPTIONS): FileReport {
-  const state: ScanState = { evidence: [], categoryScores: {} };
+  const state: ScanState = { evidence: [], categoryScores: {}, signalScores: emptySignalScores() };
   const suffix = extname(path).toLowerCase();
 
   for (const spec of REGEX_PATTERNS) {
@@ -303,6 +317,7 @@ export function scanTextFile(path: string, text: string, context: ProjectContext
     path: safeRelative(path, context.root),
     score: round(score),
     confidence: confidenceForScore(score),
+    signalScores: roundSignalScores(state.signalScores),
     categoryScores: roundRecord(state.categoryScores),
     metrics,
     evidence: state.evidence
@@ -800,7 +815,7 @@ function addMetricHits(
   hits: [number, string][],
   score: number,
   options: ScanOptions,
-  metadata: Omit<Evidence, "weight" | "line" | "excerpt">
+  metadata: Omit<EvidenceDraft, "weight" | "line" | "excerpt">
 ): void {
   const visible = hits.slice(0, options.maxEvidencePerPattern);
   if (visible.length === 0) {
@@ -817,10 +832,19 @@ function addMetricHits(
   }
 }
 
-function addEvidence(state: ScanState, evidence: Evidence): void {
-  const rounded: Evidence = { ...evidence, weight: round(evidence.weight) };
+function addEvidence(state: ScanState, evidence: EvidenceDraft): void {
+  const signalKind = evidence.signalKind ?? signalKindForEvidence(evidence.patternId, evidence.category);
+  const rounded: Evidence = { ...evidence, signalKind, weight: round(evidence.weight) };
   state.evidence.push(rounded);
   state.categoryScores[rounded.category] = (state.categoryScores[rounded.category] ?? 0) + rounded.weight;
+  state.signalScores[rounded.signalKind] = (state.signalScores[rounded.signalKind] ?? 0) + rounded.weight;
+}
+
+function signalKindForEvidence(patternId: string, category: string): SignalKind {
+  if (patternId in AUTHORSHIP_PATTERN_IDS || category === "provenance" || category === "fingerprint") {
+    return "authorship";
+  }
+  return "quality_risk";
 }
 
 function pythonImportSpecs(text: string): string[] {
@@ -1014,13 +1038,26 @@ function confidenceForScore(score: number): Confidence {
 }
 
 function repositoryScore(files: readonly FileReport[]): number {
-  if (files.length === 0) {
+  return weightedRepositoryScore(files.map((file) => file.score));
+}
+
+function repositorySignalScores(files: readonly FileReport[]): Record<SignalKind, number> {
+  const scores = emptySignalScores();
+  for (const kind of SIGNAL_KINDS) {
+    scores[kind] = weightedRepositoryScore(files.map((file) => file.signalScores[kind] ?? 0));
+  }
+  return roundSignalScores(scores);
+}
+
+function weightedRepositoryScore(scores: readonly number[]): number {
+  const nonZeroScores = scores.filter((score) => score > 0).sort((left, right) => right - left);
+  if (nonZeroScores.length === 0) {
     return 0;
   }
-  const topScores = files.slice(0, 10).map((file) => file.score);
+  const topScores = nonZeroScores.slice(0, 10);
   const topAverage = topScores.reduce((total, score) => total + score, 0) / topScores.length;
-  const strongest = files[0]?.score ?? 0;
-  const coverage = Math.min(25, files.filter((file) => file.score >= 20).length * 3);
+  const strongest = topScores[0] ?? 0;
+  const coverage = Math.min(25, nonZeroScores.filter((score) => score >= 20).length * 3);
   return Math.min(100, strongest * 0.55 + topAverage * 0.3 + coverage);
 }
 
@@ -1038,6 +1075,17 @@ function roundRecord(record: Record<string, number>): Record<string, number> {
 
 function hasObjectShape(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function emptySignalScores(): Record<SignalKind, number> {
+  return { authorship: 0, quality_risk: 0 };
+}
+
+function roundSignalScores(record: Record<SignalKind, number>): Record<SignalKind, number> {
+  return {
+    authorship: round(Math.min(100, record.authorship)),
+    quality_risk: round(Math.min(100, record.quality_risk))
+  };
 }
 
 function isString(value: unknown): value is string {

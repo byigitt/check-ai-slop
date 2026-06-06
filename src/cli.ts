@@ -165,7 +165,7 @@ function parseNumber(value: string, option: string): number {
 function helpText(): string {
   return `Usage: check-ai-slop [path] [options]
 
-Scan a codebase for explainable, weighted AI-code/slop signals.
+Scan code for two separate buckets: authorship evidence and quality-risk evidence.
 
 Options:
   --json                 Print JSON report.
@@ -182,13 +182,17 @@ Options:
 
 function formatTextReport(report: ScanReport, maxFiles: number): string {
   const lines: string[] = [];
-  lines.push(`AI slop suspicion: ${report.confidence} (${report.score.toFixed(1)}/100)`);
+  lines.push(`Review priority: ${report.confidence} (${report.score.toFixed(1)}/100)`);
+  lines.push(
+    `Authorship evidence ${report.signalScores.authorship.toFixed(1)}/100, ` +
+      `quality-risk evidence ${report.signalScores.quality_risk.toFixed(1)}/100.`
+  );
   lines.push(`Scanned ${report.filesScanned} files, skipped ${report.filesSkipped}, evidence items ${report.evidenceCount}.`);
   if (report.errors.length > 0) {
     lines.push(`Read errors: ${report.errors.length}`);
   }
   if (report.files.length === 0) {
-    lines.push("No AI-code/slop signals found in scanned code files.");
+    lines.push("No authorship or quality-risk signals found in scanned code files.");
     lines.push("");
     return lines.join("\n");
   }
@@ -205,7 +209,10 @@ function formatTextReport(report: ScanReport, maxFiles: number): string {
 }
 
 function appendFileReport(lines: string[], file: FileReport): void {
-  lines.push(`- ${file.path}: ${file.confidence} (${file.score.toFixed(1)}/100)`);
+  lines.push(
+    `- ${file.path}: ${file.confidence} (${file.score.toFixed(1)}/100; ` +
+      `authorship=${file.signalScores.authorship.toFixed(1)}, quality_risk=${file.signalScores.quality_risk.toFixed(1)})`
+  );
   const categoryText = Object.entries(file.categoryScores)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value.toFixed(1)}`)
@@ -225,7 +232,7 @@ function appendFileReport(lines: string[], file: FileReport): void {
       continue;
     }
     const total = items.reduce((sum, item) => sum + item.weight, 0);
-    lines.push(`  - ${first.title} [${patternId}] (+${total.toFixed(1)})`);
+    lines.push(`  - ${first.title} [${first.signalKind}/${patternId}] (+${total.toFixed(1)})`);
     for (const item of items.slice(0, 2)) {
       lines.push(`    L${item.line}: ${item.excerpt}`);
     }
