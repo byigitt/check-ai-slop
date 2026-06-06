@@ -117,6 +117,14 @@ Humans write same bugs and style too. Security tools, tests, detector repos, doc
 - treat score as authorship proof
 - scan detector repo and panic when detector strings match
 
+## GitHub Packages
+
+npmjs package name: `check-ai-slop`.
+
+GitHub Packages requires scoped npm names. Workflow publishes same code as `@byigitt/check-ai-slop` to `npm.pkg.github.com`, so package appears under repo Packages tab.
+
+Run GitHub Action: `Publish GitHub Package`.
+
 ## Dev
 
 ```bash
