@@ -1,6 +1,6 @@
 {
   "name": "check-ai-slop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Offline, explainable heuristics for spotting AI-generated code patterns in a codebase.",
   "type": "module",
   "bin": {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { scanPath } from "./scanner.js";
 import type { FileReport, ScanOptions, ScanReport } from "./types.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const THRESHOLDS: Record<string, number> = { low: 20, medium: 40, high: 70 };
 
 interface CliArgs {
