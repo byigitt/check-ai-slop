@@ -1,0 +1,36 @@
+{
+  "name": "check-ai-slop",
+  "version": "0.1.0",
+  "description": "Offline, explainable heuristics for spotting AI-generated code patterns in a codebase.",
+  "type": "module",
+  "bin": {
+    "check-ai-slop": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "prepack": "npm run build",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai-code-detection",
+    "ai-slop",
+    "code-quality",
+    "static-analysis",
+    "npx"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
