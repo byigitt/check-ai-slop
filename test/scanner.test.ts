@@ -16,6 +16,19 @@ function withTempDir(callback: (directory: string) => void): void {
   }
 }
 
+function hasGit(): boolean {
+  try {
+    execFileSync("git", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function git(directory: string, args: string[]): void {
+  execFileSync("git", ["-C", directory, ...args], { stdio: "ignore" });
+}
+
 test("detects the referenced was-gpt-here TypeScript helper", () => {
   withTempDir((directory) => {
     writeFileSync(
@@ -149,6 +162,72 @@ _AI_COMMIT_MARKERS = [
     assert.ok(patternIds.has("ai_attribution_footer_cluster"));
     assert.ok(report.signalScores.authorship > report.signalScores.quality_risk);
     assert.ok(patternIds.has("self_admitted_ai_comment"));
+  });
+});
+
+test("detects explicit AI provenance in recent Git commit metadata", { skip: !hasGit() }, () => {
+  withTempDir((directory) => {
+    writeFileSync(
+      join(directory, "math.ts"),
+      `export function add(left: number, right: number): number {
+  return left + right;
+}
+`
+    );
+    git(directory, ["init"]);
+    git(directory, ["config", "user.name", "Human Maintainer"]);
+    git(directory, ["config", "user.email", "human@example.com"]);
+    git(directory, ["add", "."]);
+    git(directory, [
+      "commit",
+      "-m",
+      "Add clean helper",
+      "-m",
+      "🤖 Generated with [Claude Code](https://claude.ai/code)\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+    ]);
+
+    const report = scanPath(directory, { includeUnknownImports: false });
+    const gitFile = report.files.find((file) => file.path === ".git/commit-history");
+    const patternIds = new Set(gitFile?.evidence.map((item) => item.patternId));
+
+    assert.equal(report.confidence, "high");
+    assert.equal(gitFile?.confidence, "high");
+    assert.ok(patternIds.has("git_ai_attribution_marker"));
+    assert.ok((gitFile?.signalScores.authorship ?? 0) > 0);
+
+    const disabledReport = scanPath(directory, { includeUnknownImports: false, includeGitSignals: false });
+    assert.equal(disabledReport.files.some((file) => file.path === ".git/commit-history"), false);
+  });
+});
+
+test("scopes Git signals to the scanned path and ignores non-AI generator links", { skip: !hasGit() }, () => {
+  withTempDir((directory) => {
+    git(directory, ["init"]);
+    git(directory, ["config", "user.name", "Human Maintainer"]);
+    git(directory, ["config", "user.email", "human@example.com"]);
+
+    writeFileSync(join(directory, "clean.ts"), "export const clean = 1;\n");
+    git(directory, ["add", "clean.ts"]);
+    git(directory, ["commit", "-m", "Add clean file"]);
+
+    writeFileSync(join(directory, "generated.ts"), "export const generated = 1;\n");
+    git(directory, ["add", "generated.ts"]);
+    git(directory, ["commit", "-m", "Add generated file", "-m", "Generated with [Claude Code](https://claude.ai/code)"]);
+
+    writeFileSync(join(directory, "schema.ts"), "export const schema = 1;\n");
+    git(directory, ["add", "schema.ts"]);
+    git(directory, ["commit", "-m", "Regenerate schema", "-m", "Generated with [GraphQL Code Generator](https://the-guild.dev/graphql/codegen)"]);
+
+    const directoryReport = scanPath(directory, { includeUnknownImports: false });
+    assert.ok(directoryReport.files.some((file) => file.path === ".git/commit-history"));
+
+    const cleanFileReport = scanPath(join(directory, "clean.ts"), { includeUnknownImports: false });
+    assert.equal(cleanFileReport.confidence, "clean");
+    assert.equal(cleanFileReport.files.some((file) => file.path === ".git/commit-history"), false);
+
+    const nonAiGeneratorReport = scanPath(join(directory, "schema.ts"), { includeUnknownImports: false });
+    assert.equal(nonAiGeneratorReport.confidence, "clean");
+    assert.equal(nonAiGeneratorReport.files.some((file) => file.path === ".git/commit-history"), false);
   });
 });
 

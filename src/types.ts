@@ -7,6 +7,7 @@ export interface ScanOptions {
   maxEvidencePerPattern: number;
   includeUnknownImports: boolean;
   includeGitSignals: boolean;
+  maxGitCommits: number;
 }
 
 export interface Evidence {

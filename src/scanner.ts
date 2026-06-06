@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { PYTHON, REGEX_PATTERNS, TS_JS } from "./patterns.js";
@@ -180,7 +181,8 @@ const DEFAULT_OPTIONS: ScanOptions = {
   includeHidden: false,
   maxEvidencePerPattern: 4,
   includeUnknownImports: true,
-  includeGitSignals: true
+  includeGitSignals: true,
+  maxGitCommits: 200
 };
 
 const OBVIOUS_COMMENT_RE = /^\s*(?:\/\/|#)\s*(?:Loop through|Iterate over|Initialize|Create|Get|Set|Check if|Validate|Return|Print|Calculate|Convert|Parse|Open|Close|Read|Write|Fetch|Map|Filter|Handle|Update|Ensure)\b/i;
@@ -195,6 +197,15 @@ const NULL_GUARD_RE = /\b(?:if\s*\([^)]*(?:===?\s*(?:null|undefined)|!={1,2}\s*(
 const MOCK_RE = /\b(?:dummy|dummies|stub|mock|spy|spies|fake|monkeypatch|monkey_patch|MagicMock|jest\.mock|vi\.mock|sinon|patch\s*\()/gi;
 const JSDOC_RE = /\/\*\*[\s\S]*?\*\//g;
 const SIGNAL_KINDS: readonly SignalKind[] = ["authorship", "quality_risk"];
+const GIT_FIELD_SEPARATOR = "\x1f";
+const GIT_RECORD_SEPARATOR = "\x1e";
+const GIT_AI_TOOL_RE_SOURCE = String.raw`(?:claude(?:\s+code)?|anthropic|chatgpt|openai|gpt[- ]?\d*(?:\.\d+)?|github\s+copilot|copilot|cursor|codex|gemini|ai\s+assistant|llm)`;
+const GIT_AI_GENERATED_TARGET_RE_SOURCE = String.raw`(?:\[[^\]]*\b(?:claude(?:\s+code)?|anthropic|chatgpt|openai|gpt[- ]?\d*(?:\.\d+)?|github\s+copilot|copilot|cursor|codex|gemini|ai|llm)\b[^\]]*\]\([^)]*\)|\b(?:claude(?:\s+code)?|anthropic|chatgpt|openai|gpt[- ]?\d*(?:\.\d+)?|github\s+copilot|copilot|cursor|codex|gemini|ai|llm)\b)`;
+const GIT_AI_COMMIT_MESSAGE_RE = new RegExp(
+  String.raw`\b(?:co-authored-by|generated-by|authored-by|coded-by|ai-assisted-by)\s*:?[^\n]*${GIT_AI_TOOL_RE_SOURCE}|(?:🤖\s*)?\bgenerated\s+(?:with|by|using|via)\s+${GIT_AI_GENERATED_TARGET_RE_SOURCE}(?=\W|$)`,
+  "i"
+);
+const GIT_AI_ACTOR_RE = /\b(?:claude(?:\s+code)?|anthropic|chatgpt|openai|github\s+copilot|copilot|cursor|codex|gemini)\b/i;
 const AUTHORSHIP_PATTERN_IDS: Record<string, true> = {
   ts_exact_is_record_guard: true,
   ts_record_guard_family: true,
@@ -215,6 +226,15 @@ interface ReadResult {
   path: string;
   text: string;
   size: number;
+}
+
+interface GitCommitRecord {
+  hash: string;
+  authorName: string;
+  authorEmail: string;
+  committerName: string;
+  committerEmail: string;
+  message: string;
 }
 
 interface ScanState {
@@ -256,6 +276,13 @@ export function scanPath(inputPath: string, overrides: Partial<ScanOptions> = {}
     const report = scanTextFile(readResult.path, readResult.text, context, options);
     if (report.evidence.length > 0) {
       files.push(report);
+    }
+  }
+
+  if (options.includeGitSignals && options.maxGitCommits > 0) {
+    const gitReport = scanGitHistory(context.root, root, options);
+    if (gitReport) {
+      files.push(gitReport);
     }
   }
 
@@ -389,6 +416,171 @@ function readCodeFile(path: string, options: ScanOptions): ReadResult | undefine
     return undefined;
   }
   return { path, text: raw.toString("utf8"), size: stats.size };
+}
+
+function scanGitHistory(root: string, scanRoot: string, options: ScanOptions): FileReport | undefined {
+  const gitRoot = resolveGitRoot(root);
+  if (!gitRoot) {
+    return undefined;
+  }
+  const pathspec = gitPathspec(gitRoot, scanRoot);
+  const commits = readGitCommits(gitRoot, options.maxGitCommits, pathspec);
+  if (commits.length === 0) {
+    return undefined;
+  }
+
+  const state: ScanState = { evidence: [], categoryScores: {}, signalScores: emptySignalScores() };
+  const attributionHits: [number, string][] = [];
+  const actorHits: [number, string][] = [];
+
+  commits.forEach((commit, index) => {
+    const line = index + 1;
+    const short = shortHash(commit.hash);
+    const attributionLine = firstMatchingLine(commit.message, GIT_AI_COMMIT_MESSAGE_RE);
+    if (attributionLine) {
+      attributionHits.push([line, `${short}: ${attributionLine}`]);
+    }
+
+    const actorText = [commit.authorName, commit.authorEmail, commit.committerName, commit.committerEmail]
+      .filter(Boolean)
+      .join(" ");
+    if (GIT_AI_ACTOR_RE.test(actorText)) {
+      actorHits.push([line, `${short}: ${actorText}`]);
+    }
+  });
+
+  if (attributionHits.length > 0) {
+    addMetricHits(state, attributionHits, 100, options, {
+      patternId: "git_ai_attribution_marker",
+      title: "AI attribution marker in Git commit metadata",
+      category: "provenance",
+      reason: "Commit messages and trailers can preserve explicit AI assistant provenance such as Co-authored-by Claude/Cursor/Codex or generated-with footers.",
+      falsePositiveRisk: "Policy, detector, and documentation repos may discuss these markers intentionally; inspect the commit context before treating it as authorship proof.",
+      source: "https://docs.github.com/en/repositories/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors"
+    });
+  }
+
+  if (actorHits.length > 0) {
+    addMetricHits(state, actorHits, 80, options, {
+      patternId: "git_ai_tool_actor",
+      title: "AI tool name in Git author/committer metadata",
+      category: "provenance",
+      reason: "Author or committer names/emails containing Claude, Codex, Cursor, Copilot, OpenAI, Anthropic, or Gemini are strong provenance-review signals.",
+      falsePositiveRisk: "A human, bot, branch, or company account can contain these words for non-authorship reasons; verify the real actor before judging.",
+      source: "https://docs.github.com/en/repositories/viewing-activity-and-data-for-your-repository/viewing-a-projects-contributors"
+    });
+  }
+
+  if (state.evidence.length === 0) {
+    return undefined;
+  }
+
+  const rawScore = Object.values(state.categoryScores).reduce((total, value) => total + value, 0);
+  const score = Math.min(100, rawScore);
+  return {
+    path: ".git/commit-history",
+    score: round(score),
+    confidence: confidenceForScore(score),
+    signalScores: roundSignalScores(state.signalScores),
+    categoryScores: roundRecord(state.categoryScores),
+    metrics: {
+      commitsScanned: commits.length,
+      maxGitCommits: options.maxGitCommits,
+      pathspec: pathspec ?? ".",
+      evidenceCount: state.evidence.length
+    },
+    evidence: state.evidence
+  };
+}
+
+function resolveGitRoot(root: string): string | undefined {
+  try {
+    return execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function gitPathspec(gitRoot: string, scanRoot: string): string | undefined {
+  const rel = relative(safeRealpath(gitRoot), safeRealpath(scanRoot));
+  if (!rel || rel === ".") {
+    return undefined;
+  }
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    return undefined;
+  }
+  return rel.split(sep).join("/");
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function readGitCommits(gitRoot: string, maxCommits: number, pathspec: string | undefined): GitCommitRecord[] {
+  try {
+    const args = ["-C", gitRoot, "log", `--max-count=${maxCommits}`, `--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%B%x1e`];
+    if (pathspec) {
+      args.push("--", pathspec);
+    }
+    const output = execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024
+    });
+    return parseGitLog(output);
+  } catch {
+    return [];
+  }
+}
+
+function parseGitLog(output: string): GitCommitRecord[] {
+  const commits: GitCommitRecord[] = [];
+  for (const rawRecord of output.split(GIT_RECORD_SEPARATOR)) {
+    const record = rawRecord.trimEnd();
+    if (!record) {
+      continue;
+    }
+    const fields = record.split(GIT_FIELD_SEPARATOR);
+    if (fields.length < 6) {
+      continue;
+    }
+    const [hash, authorName, authorEmail, committerName, committerEmail] = fields;
+    if (!hash) {
+      continue;
+    }
+    commits.push({
+      hash,
+      authorName: authorName ?? "",
+      authorEmail: authorEmail ?? "",
+      committerName: committerName ?? "",
+      committerEmail: committerEmail ?? "",
+      message: fields.slice(5).join(GIT_FIELD_SEPARATOR).trim()
+    });
+  }
+  return commits;
+}
+
+function firstMatchingLine(text: string, regex: RegExp): string | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed && regex.test(trimmed)) {
+      return trimmed.slice(0, 220);
+    }
+  }
+  return undefined;
+}
+
+function shortHash(hash: string): string {
+  return hash.slice(0, 12);
 }
 
 function applyRegexPattern(spec: PatternSpec, text: string, state: ScanState, options: ScanOptions): void {

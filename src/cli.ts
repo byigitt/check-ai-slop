@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { scanPath } from "./scanner.js";
 import type { FileReport, ScanOptions, ScanReport } from "./types.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const THRESHOLDS: Record<string, number> = { low: 20, medium: 40, high: 70 };
 
 interface CliArgs {
@@ -15,6 +15,8 @@ interface CliArgs {
   maxFileBytes: number;
   includeHidden: boolean;
   includeUnknownImports: boolean;
+  includeGitSignals: boolean;
+  maxGitCommits: number;
   failOn?: string;
   minScore?: number;
   help: boolean;
@@ -47,7 +49,9 @@ export function main(argv = process.argv.slice(2)): number {
   const options: Partial<ScanOptions> = {
     maxFileBytes: args.maxFileBytes,
     includeHidden: args.includeHidden,
-    includeUnknownImports: args.includeUnknownImports
+    includeUnknownImports: args.includeUnknownImports,
+    includeGitSignals: args.includeGitSignals,
+    maxGitCommits: args.maxGitCommits
   };
   let report: ScanReport;
   try {
@@ -75,6 +79,8 @@ function parseArgs(argv: readonly string[]): CliArgs {
     maxFileBytes: 2 * 1024 * 1024,
     includeHidden: false,
     includeUnknownImports: true,
+    includeGitSignals: true,
+    maxGitCommits: 200,
     help: false,
     version: false
   };
@@ -104,12 +110,20 @@ function parseArgs(argv: readonly string[]): CliArgs {
       args.includeUnknownImports = false;
       continue;
     }
+    if (arg === "--no-git-signals") {
+      args.includeGitSignals = false;
+      continue;
+    }
     if (arg === "--top") {
       args.top = parseInteger(readOptionValue(argv, ++index, arg), arg);
       continue;
     }
     if (arg === "--max-file-bytes") {
       args.maxFileBytes = parseInteger(readOptionValue(argv, ++index, arg), arg);
+      continue;
+    }
+    if (arg === "--max-git-commits") {
+      args.maxGitCommits = parseInteger(readOptionValue(argv, ++index, arg), arg);
       continue;
     }
     if (arg === "--fail-on") {
@@ -165,7 +179,7 @@ function parseNumber(value: string, option: string): number {
 function helpText(): string {
   return `Usage: check-ai-slop [path] [options]
 
-Scan code for two separate buckets: authorship evidence and quality-risk evidence.
+Scan code and recent Git commit metadata for two separate buckets: authorship evidence and quality-risk evidence.
 
 Options:
   --json                 Print JSON report.
@@ -173,6 +187,8 @@ Options:
   --max-file-bytes <n>   Skip files larger than n bytes. Default: 2097152.
   --include-hidden       Include hidden files/directories except vendor/cache ignores.
   --no-unknown-imports   Disable dependency-manifest import checks.
+  --no-git-signals       Disable Git commit metadata provenance checks.
+  --max-git-commits <n>  Max recent commits to scan for Git signals. Default: 200.
   --fail-on <level>      Exit 1 when score reaches low, medium, or high.
   --min-score <n>        Exit 1 when score reaches numeric threshold.
   --version, -v          Print version.
@@ -192,12 +208,12 @@ function formatTextReport(report: ScanReport, maxFiles: number): string {
     lines.push(`Read errors: ${report.errors.length}`);
   }
   if (report.files.length === 0) {
-    lines.push("No authorship or quality-risk signals found in scanned code files.");
+    lines.push("No authorship or quality-risk signals found in scanned code files or Git metadata.");
     lines.push("");
     return lines.join("\n");
   }
 
-  lines.push("", "Top flagged files:");
+  lines.push("", "Top flagged files/signals:");
   for (const file of report.files.slice(0, maxFiles)) {
     appendFileReport(lines, file);
   }
